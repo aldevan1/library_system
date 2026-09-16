@@ -60,13 +60,29 @@ st.caption("Day 3 Lab: Pure Python Web Frontend with Streamlit")
 #    - Column 3: Currently Borrowed
 #    - Column 4: Average Release Year
 #
-# Hint:
-# summary = generate_library_summary(books)
-# m1, m2, m3, m4 = st.columns(4)
-# m1.metric("Total Books", summary.get("total_books", 0))
-# ...
+# Call backend reporting module
+summary = generate_library_summary(books)
 
-st.info("👉 Complete TODO 1 in app.py to render library status metrics cards here.")
+# Create 4 columns for metric cards
+m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+with m_col1:
+    st.metric(label="Total Books", value=summary.get("total_books", 0))
+with m_col2:
+    st.metric(
+        label="Available on Shelf",
+        value=summary.get("available_books", 0),
+        delta=f"{summary.get('available_books', 0)} ready",
+    )
+with m_col3:
+    st.metric(
+        label="Currently Borrowed",
+        value=summary.get("borrowed_books", 0),
+        delta=f"-{summary.get('borrowed_books', 0)} out" if summary.get("borrowed_books", 0) > 0 else "None",
+        delta_color="inverse",
+    )
+with m_col4:
+    avg_yr = summary.get("average_year", 0.0)
+    st.metric(label="Average Release Year", value=f"{avg_yr:.1f}" if avg_yr > 0 else "N/A")
 
 st.divider()
 
@@ -95,7 +111,51 @@ with tab_browse:
     #    df = pd.DataFrame(...)
     #    st.dataframe(df, use_container_width=True, hide_index=True)
 
-    st.info("👉 Complete TODO 2 in app.py to display the searchable book catalog.")
+    f_col1, f_col2 = st.columns([1, 2])
+    with f_col1:
+        genres = ["All Genres"] + summary.get("unique_genres", [])
+        selected_genre = st.selectbox("Filter by Genre", options=genres)
+
+    with f_col2:
+        search_query = st.text_input(
+            "Search by Author or Title",
+            placeholder="Type search keywords...",
+        )
+
+    filtered = books
+    if selected_genre != "All Genres":
+        filtered = find_books_by_genre(filtered, selected_genre)
+
+    if search_query.strip():
+        query = search_query.strip().lower()
+        title_matches = [
+            book for book in filtered
+            if query in book.get("title", "").lower()
+        ]
+        author_matches = find_books_by_author(filtered, query)
+        filtered = title_matches + [
+            book for book in author_matches if book not in title_matches
+        ]
+
+    st.write(f"Showing **{len(filtered)}** of **{len(books)}** book(s)")
+
+    if filtered:
+        table_rows = [
+            {
+                "ID": book.get("id"),
+                "Title": book.get("title"),
+                "Author": book.get("author"),
+                "Year": book.get("year"),
+                "Genres": ", ".join(book.get("genres", [])),
+                "Status": "Available" if book.get("is_available") else "Borrowed",
+                "Borrower": book.get("borrower", "-"),
+            }
+            for book in filtered
+        ]
+        df = pd.DataFrame(table_rows)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No books match the selected filters.")
 
 
 # ===================================================================
@@ -117,8 +177,24 @@ with tab_add:
     #    - Call backend validate_book(candidate_book) inside a try/except ValueError block
     #    - Append to books and call save_books(DATA_FILE, books)
     #    - Show st.success(...) and st.rerun()
-
-    st.info("👉 Complete TODO 3 in app.py to implement book registration.")
+    with st.form("form_cadastro_livro", clear_on_submit=True):
+        new_title = st.text_input("Título da Obra *")
+        new_author = st.text_input("Autor(es) *")
+        new_year = st.number_input("Ano de Publicação *", min_value=1500, max_value=2050, value=2024)
+        new_genres = st.text_input("Gêneros (separados por vírgula) *")
+        if st.form_submit_button("Cadastrar Livro", type="primary"):
+            next_id = max([b.get("id", 0) for b in books], default=0) + 1
+            candidate = {"id": next_id, "title": new_title.strip(), "author": new_author.strip(),
+                        "year": int(new_year), "genres": [g.strip() for g in new_genres.split(",") if g.strip()],
+                        "is_available": True}
+            try:
+                validate_book(candidate)  # Validação no backend!
+                books.append(candidate)
+                save_books(DATA_FILE, books)
+                st.success(f"Registrado com sucesso #{next_id}: {candidate['title']}!")
+                st.rerun()
+            except ValueError as e:
+                st.error(f"Erro de Validação: {e}")
 
 
 # ===================================================================
@@ -139,4 +215,23 @@ with tab_circulation:
     #    - On button click, call backend return_book(books, book_id)
     #    - Call save_books(DATA_FILE, books) and st.rerun()
 
-    st.info("👉 Complete TODO 4 in app.py to implement checkout and return workflows.")
+    avail = [b for b in books if b.get("is_available")]
+    opts = {f"#{b['id']}: {b['title']}": b["id"] for b in avail}
+    chosen = st.selectbox("Livro:", list(opts.keys()))
+    borrower = st.text_input("Nome do Aluno:")
+
+    if st.button("Realizar Empréstimo"):
+        receipt = checkout_book(books, opts[chosen], borrower)
+        save_books(DATA_FILE, books)
+        st.success(f"Emprestado para {receipt['borrower']}!")
+        st.rerun()
+
+    out = [b for b in books if not b.get("is_available")]
+    ret_opts = {f"#{b['id']}: {b['title']}": b["id"] for b in out}
+    ret_chosen = st.selectbox("Devolver Livro:", list(ret_opts.keys()))
+
+    if st.button("Confirmar Devolução"):
+        receipt = return_book(books, ret_opts[ret_chosen])
+        save_books(DATA_FILE, books)
+        st.success(f"Devolvido: {receipt['title']}!")
+        st.rerun()
